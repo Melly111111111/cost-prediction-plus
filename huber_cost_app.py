@@ -833,7 +833,7 @@ if last:
             orientation="h",
             color="成本贡献",
             color_continuous_scale="RdYlGn_r",
-            title="Huber 成本贡献分析",
+            title="各工艺参数对成本的影响权重",
         )
         fig.update_layout(
             height=430,
