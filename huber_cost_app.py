@@ -19,6 +19,31 @@ APP_DIR = Path(__file__).resolve().parent
 MODEL_PATH = APP_DIR / "huber_only_model.joblib"
 DB_PATH = APP_DIR / "cost_feedback.db"
 
+INPUT_PARAMETER_COLUMNS = [
+    "长（cm）",
+    "宽（cm）",
+    "层数",
+    "克重g/㎡",
+    "粘胶配比%",
+    "涤纶配比%",
+    "机型（cm）",
+    "开料（cm）",
+    "断料（cm）",
+    "灭菌方式",
+    "MOQ",
+    "纸袋（高）",
+    "内包装材质",
+    "材质色数（内）",
+    "纸箱（长）",
+    "纸箱（宽）",
+    "纸箱（高）",
+    "外箱材质",
+    "材质色数（外）",
+    "每箱数量（PCS)",
+    "折叠产能（PCS)",
+    "折叠岗位人数",
+]
+
 
 PAGE_CSS = """
 <style>
@@ -287,12 +312,42 @@ def read_feedback(limit: int = 200) -> pd.DataFrame:
         )
 
 
+def parse_json_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def expand_prediction_inputs(records: pd.DataFrame) -> pd.DataFrame:
+    if records.empty:
+        return records.drop(columns=["input_json"], errors="ignore")
+
+    input_values = [parse_json_dict(value) for value in records["input_json"]]
+    input_df = pd.DataFrame(input_values)
+    for col in INPUT_PARAMETER_COLUMNS:
+        if col not in input_df.columns:
+            input_df[col] = None
+
+    extra_cols = [col for col in input_df.columns if col not in INPUT_PARAMETER_COLUMNS]
+    input_df = input_df[INPUT_PARAMETER_COLUMNS + extra_cols].reset_index(drop=True)
+
+    base_df = records.drop(columns=["input_json"]).reset_index(drop=True)
+    prefix_cols = [col for col in ["预测时间", "预测ID"] if col in base_df.columns]
+    suffix_cols = [col for col in base_df.columns if col not in prefix_cols]
+    return pd.concat([base_df[prefix_cols], input_df, base_df[suffix_cols]], axis=1)
+
+
 def read_predictions(limit: int = 200) -> pd.DataFrame:
     with connect_db() as conn:
-        return pd.read_sql_query(
+        records = pd.read_sql_query(
             """
             SELECT created_at AS 预测时间,
                    id AS 预测ID,
+                   input_json,
                    prediction AS 预测成本,
                    avg_cost AS 历史均值,
                    median_cost AS 历史中位数,
@@ -304,6 +359,7 @@ def read_predictions(limit: int = 200) -> pd.DataFrame:
             conn,
             params=(limit,),
         )
+    return expand_prediction_inputs(records)
 
 
 @st.cache_resource
@@ -867,3 +923,9 @@ with st.expander("数据库记录", expanded=False):
             st.info("还没有预测记录。")
         else:
             st.dataframe(predictions_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "下载预测记录 CSV",
+                data=predictions_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="cost_prediction_records.csv",
+                mime="text/csv",
+            )
