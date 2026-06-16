@@ -42,24 +42,16 @@ PAGE_CSS = """
     .price-box {
         background-color: white;
         border: 2px solid #0f3d5e;
-        border-radius: 8px 8px 0 0;
+        border-radius: 8px;
         padding: 20px;
         text-align: center;
         margin-bottom: 0;
     }
     .price-box h2 {
-        color: #c0392b;
+        color: #0f3d5e;
         margin: 8px 0 0 0;
         font-size: 34px;
         letter-spacing: 0;
-    }
-    .delta-box {
-        background-color: #eaf2f8;
-        border: 1px solid #d5e3ee;
-        border-top: none;
-        border-radius: 0 0 8px 8px;
-        padding: 14px;
-        text-align: center;
     }
     .judgment-box {
         padding: 15px;
@@ -608,6 +600,25 @@ def distribution_rating(predicted_cost: float, history: pd.Series) -> tuple[str,
     return "高价位", "#dc2626", "明显高于常规水平，建议重点复核成本构成。"
 
 
+def history_percentile(predicted_cost: float, history: pd.Series) -> float | None:
+    data = pd.to_numeric(history, errors="coerce").dropna()
+    data = data[data > 0]
+    if data.empty:
+        return None
+    return float((data <= predicted_cost).mean() * 100)
+
+
+def prediction_judgment(predicted_cost: float, history: pd.Series) -> tuple[str, str]:
+    pct = history_percentile(predicted_cost, history)
+    if pct is None:
+        return "judgment-warning", "历史数据不足，当前结果仅供参考。"
+    if pct < 5:
+        return "judgment-warning", f"当前预测低于历史5%分位（约{pct:.1f}%分位），建议复核是否存在漏填或异常低值。"
+    if pct > 95:
+        return "judgment-danger", f"当前预测高于历史95%分位（约{pct:.1f}%分位），建议重点复核成本构成。"
+    return "judgment-success", f"当前预测位于历史常规区间（约{pct:.1f}%分位），可作为常规报价参考。"
+
+
 def render_history_analysis_section(history: pd.DataFrame, target: str, predicted_cost: float) -> None:
     data = history[target].dropna()
     data = data[data > 0]
@@ -652,10 +663,6 @@ def render_history_analysis_section(history: pd.DataFrame, target: str, predicte
         </div>
         """
         st.markdown(right_html, unsafe_allow_html=True)
-
-
-def format_rate(value: float) -> str:
-    return f"{value * 100:+.2f}%"
 
 
 st.set_page_config(page_title="纱布成本预测与人工校准系统", layout="wide")
@@ -773,8 +780,6 @@ if predict_clicked:
 last = st.session_state.last_prediction
 if last:
     predicted_cost = float(last["predicted_cost"])
-    delta_avg = (predicted_cost - avg_cost) / max(abs(avg_cost), 1e-12)
-    delta_median = (predicted_cost - median_cost) / max(abs(median_cost), 1e-12)
 
     st.markdown('<div class="section-header">成本预测结果</div>', unsafe_allow_html=True)
     res_col1, res_col2 = st.columns([1, 2])
@@ -786,19 +791,10 @@ if last:
                 <h2>{predicted_cost:.6f}</h2>
                 <p style="color:#596b7a; margin:6px 0 0 0;">{last["source"]}</p>
             </div>
-            <div class="delta-box">
-                <div>较历史均值：<b>{format_rate(delta_avg)}</b></div>
-                <div>较历史中位数：<b>{format_rate(delta_median)}</b></div>
-            </div>
             """,
             unsafe_allow_html=True,
         )
-        if abs(delta_median) <= 0.1:
-            klass, text = "judgment-success", "当前预测接近历史中位水平，可作为常规报价参考。"
-        elif delta_median > 0.1:
-            klass, text = "judgment-warning", "当前预测高于历史中位水平，建议核对包装、产能或用料参数。"
-        else:
-            klass, text = "judgment-danger", "当前预测低于历史中位水平，建议确认是否存在漏填或异常输入。"
+        klass, text = prediction_judgment(predicted_cost, history_df[target_col])
         st.markdown(f'<div class="judgment-box {klass}">{text}</div>', unsafe_allow_html=True)
 
         st.markdown("#### 人工确认成本")
